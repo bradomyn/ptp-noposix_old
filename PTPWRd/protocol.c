@@ -615,6 +615,7 @@ void doState(RunTimeOpts *rtOpts, PtpPortDS *ptpPortDS)
 	case PTP_PASSIVE:
 	case PTP_SLAVE:
 
+        pps_gen_enable_output(1);
 		handle(rtOpts, ptpPortDS);
 
 		if(timerExpired(&ptpPortDS->timers.announceReceipt) )
@@ -658,6 +659,7 @@ void doState(RunTimeOpts *rtOpts, PtpPortDS *ptpPortDS)
 		break;
 
 	case PTP_MASTER:
+        pps_gen_enable_output(1);
 
 		if(ptpPortDS->wrMode == WR_MASTER  && ptpPortDS->wrPortState != WRS_IDLE)
 		{
@@ -1698,7 +1700,7 @@ void issueSync(RunTimeOpts *rtOpts,PtpPortDS *ptpPortDS)
 	msgPackSync(ptpPortDS->msgObuf,&originTimestamp,ptpPortDS);
 	
 
-	if (!netSendEvent(ptpPortDS->msgObuf,SYNC_LENGTH,&ptpPortDS->netPath,&ptpPortDS->synch_tx_ts))
+	if (!netSendPeerEvent(ptpPortDS->msgObuf,SYNC_LENGTH,&ptpPortDS->netPath,&ptpPortDS->synch_tx_ts))
 	{
 		toState(PTP_FAULTY,rtOpts,ptpPortDS);
 		
@@ -1724,7 +1726,7 @@ void issueFollowup(RunTimeOpts *rtOpts,PtpPortDS *ptpPortDS)
 
 	msgPackFollowUp(ptpPortDS->msgObuf,ptpPortDS);
 
-	if (!netSendGeneral(ptpPortDS->msgObuf,FOLLOW_UP_LENGTH,&ptpPortDS->netPath))
+	if (!netSendPeerGeneral(ptpPortDS->msgObuf,FOLLOW_UP_LENGTH,&ptpPortDS->netPath))
 	{
 		toState(PTP_FAULTY,rtOpts,ptpPortDS);
 		

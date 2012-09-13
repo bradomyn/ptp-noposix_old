@@ -1,5 +1,3 @@
-#test module
-
 # Standard stanza for cross-compilation (courtesy of the linux makefile)
 AS              = $(CROSS_COMPILE)as
 LD              = $(CROSS_COMPILE)ld

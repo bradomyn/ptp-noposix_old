@@ -75,6 +75,7 @@ typedef struct {
 
 typedef struct {
 	wr_socket_t *wrSock;
+    wr_socket_t *wrSockP; // Peer delay socket
 	char ifaceName[IFACE_NAME_LENGTH];
 	wr_sockaddr_t multicastAddr;
 	wr_sockaddr_t peerMulticastAddr;

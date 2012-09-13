@@ -11,9 +11,10 @@ It's not entirely necessary, it is a consequence of the fact that PTPd was adapt
 
 #include "ptpd_netif.h"
 #include "hal_exports.h"
-const mac_addr_t PTP_MULTICAST_ADDR = {0x01, 0x1b, 0x19, 0 , 0, 0};
+const mac_addr_t PTP_MULTICAST_ADDR = {0x01, 0x1b, 0x19, 0 , 0, 0x00};
 const mac_addr_t PTP_UNICAST_ADDR   = {0x01, 0x1b, 0x19, 0 , 0, 0};
-const mac_addr_t ZERO_ADDR          = {0x00, 0x00, 0x00, 0x00, 0x001, 0x00};
+const mac_addr_t PTP_PEER_MULTICAST_ADDR   = {0x01, 0x80, 0xC2, 0x00 ,0x00, 0x0E};
+const mac_addr_t ZERO_ADDR          =        {0x00, 0x00, 0x00, 0x00, 0x01, 0x00};
 
 /*Test if network layer is OK for PTP*/
 UInteger8 lookupCommunicationTechnology(UInteger8 communicationTechnology)
@@ -47,6 +48,10 @@ Boolean netInit(NetPath *netPath, RunTimeOpts *rtOpts, PtpPortDS *ptpPortDS)
 
   // Create a PTP socket:
   wr_sockaddr_t bindaddr;
+
+  // Create a PTP Peer Delay socket:
+  wr_sockaddr_t pBindaddr;
+ 
   
   //port numbers start with 1, but port indexing starts with 0.... a bit of mess
   int port_index = ptpPortDS->portIdentity.portNumber-1;
@@ -82,14 +87,23 @@ Boolean netInit(NetPath *netPath, RunTimeOpts *rtOpts, PtpPortDS *ptpPortDS)
 
   PTPD_TRACE(TRACE_NET, ptpPortDS,"Network interface : %s\n",netPath->ifaceName);
 
+  // RRD Mechanisim 
   bindaddr.family = PTPD_SOCK_RAW_ETHERNET;	// socket type
   bindaddr.ethertype = 0x88f7; 	        // PTPv2
   memcpy(bindaddr.mac, PTP_MULTICAST_ADDR, sizeof(mac_addr_t));
 
+  // Peer Delay Mechanism
+  pBindaddr.family = PTPD_SOCK_RAW_ETHERNET;	// socket type
+  pBindaddr.ethertype = 0x88f7; 	        // PTPv2a
+  memcpy(pBindaddr.mac, PTP_PEER_MULTICAST_ADDR, sizeof(mac_addr_t));
+
   // Create one socket for event and general messages (WR lower level layer requires that
   netPath->wrSock = ptpd_netif_create_socket(PTPD_SOCK_RAW_ETHERNET, 0, &bindaddr);
 
-  if(netPath->wrSock ==  NULL)
+  // Create one socket for Peer Delay Messages
+  netPath->wrSockP = ptpd_netif_create_socket(PTPD_SOCK_RAW_ETHERNET, 0, &pBindaddr);
+
+  if((netPath->wrSock ==  NULL) || (netPath->wrSock == NULL))
   {
     return FALSE;
   }
@@ -103,7 +117,7 @@ Boolean netInit(NetPath *netPath, RunTimeOpts *rtOpts, PtpPortDS *ptpPortDS)
     memcpy(netPath->unicastAddr.mac, ZERO_ADDR,  sizeof(mac_addr_t));
 
   memcpy(netPath->multicastAddr.mac, PTP_MULTICAST_ADDR,  sizeof(mac_addr_t));
-  memcpy(netPath->peerMulticastAddr.mac, PTP_MULTICAST_ADDR,  sizeof(mac_addr_t));
+  memcpy(netPath->peerMulticastAddr.mac, PTP_PEER_MULTICAST_ADDR,  sizeof(mac_addr_t));
 
   netPath->unicastAddr.ethertype = 0x88f7;
   netPath->multicastAddr.ethertype = 0x88f7;
@@ -212,14 +226,19 @@ return: received msg's size
 ssize_t netRecvMsg(Octet *buf, NetPath *netPath, wr_timestamp_t *current_rx_ts)
 {
     wr_sockaddr_t from_addr;
-    int ret, drop = 1;
+    int ret, drop = 1, retp;
 
     ret = ptpd_netif_recvfrom(netPath->wrSock, &from_addr, buf, 1518, current_rx_ts);
+
+    if(!(ret>0))
+        ret = ptpd_netif_recvfrom(netPath->wrSockP, &from_addr, buf, 1518, current_rx_ts);
+
     if(ret < 0)
         return ret;
 
     if( !memcmp(from_addr.mac_dest, netPath->selfAddr.mac, 6) ||
         !memcmp(from_addr.mac_dest, netPath->multicastAddr.mac, 6) ||
+        !memcmp(from_addr.mac_dest, netPath->peerMulticastAddr.mac, 6) ||
         !memcmp(from_addr.mac_dest, netPath->unicastAddr.mac, 6))
             drop = 0;
 
@@ -238,14 +257,17 @@ ssize_t netSendEvent(Octet *buf, UInteger16 length, NetPath *netPath, wr_timesta
   int ret;
 
   //Send a frame
-
   ret = ptpd_netif_sendto(netPath->wrSock, &netPath->multicastAddr, buf, length, current_tx_ts);
+
 
   if(ret <= 0)
       PTPD_TRACE(TRACE_ERROR, NULL,"error sending multi-cast event message\n");
+    
+
   return (ssize_t)ret;
 
 }
+
 /*
 sending general messages,
 
@@ -290,13 +312,16 @@ ssize_t netSendPeerGeneral(Octet *buf,UInteger16 length,NetPath *netPath)
   int ret;
 
   //Send a frame
-  ret = ptpd_netif_sendto(netPath->wrSock, &(netPath->multicastAddr), buf, length, NULL);
+  ret = ptpd_netif_sendto(netPath->wrSock, &(netPath->multicastAddr), buf, length,0);
 
   if(ret <= 0)
     PTPD_TRACE(TRACE_ERROR, NULL,"error sending multi-cast peer general message\n");
   
+  if(ret >0)
+    TRACE_DEV("************netSend_P2P_General********");
+  
   return (ssize_t)ret;
-
+  
 }
 /*
 sending Peer Events messages,
@@ -313,9 +338,15 @@ ssize_t netSendPeerEvent(Octet *buf,UInteger16 length,NetPath *netPath,wr_timest
 
   if(ret <= 0)
       PTPD_TRACE(TRACE_ERROR, NULL,"error sending multi-cast peer event message\n");
+  
+  if(ret > 0)
+     TRACE_DEV("************netSend_P2P_Event******** utc %d nsc %d phase %d correct %d\n",
+       (int32_t)current_tx_ts->sec, current_tx_ts->nsec, current_tx_ts->phase, current_tx_ts->correct);
+
   return (ssize_t)ret;
 
 }
+
 UInteger16 autoPortNumberDiscovery(void)
 {
 	char dummy[16];
